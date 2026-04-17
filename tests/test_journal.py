@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from cortex.storage.journal import JournalRepository
 
 
@@ -19,7 +21,7 @@ def test_insert_event(db_conn):
         idempotency_key=None,
         payload_hash="abc123",
         schema_version=1,
-        timestamp="2026-04-13T10:00:00Z",
+        timestamp="2026-04-13T10:00:00.000000Z",
     )
     assert result["sequence_number"] >= 1
     assert result["event_id"] == "evt-1"
@@ -42,9 +44,8 @@ def test_get_events_by_entity(db_conn):
             idempotency_key=None,
             payload_hash=f"hash-{i}",
             schema_version=1,
-            timestamp=f"2026-04-13T10:0{i}:00Z",
+            timestamp=f"2026-04-13T10:0{i}:00.000000Z",
         )
-    db_conn.commit()
 
     events = repo.get_events_by_entity("test", "fact:coffee")
     assert len(events) == 3
@@ -67,9 +68,8 @@ def test_get_events_by_entity_different_namespace(db_conn):
         idempotency_key=None,
         payload_hash="h1",
         schema_version=1,
-        timestamp="2026-04-13T10:00:00Z",
+        timestamp="2026-04-13T10:00:00.000000Z",
     )
-    db_conn.commit()
 
     events = repo.get_events_by_entity("ns-b", "fact:x")
     assert len(events) == 0
@@ -91,9 +91,8 @@ def test_find_by_idempotency_key(db_conn):
         idempotency_key="idem-1",
         payload_hash="hash-1",
         schema_version=1,
-        timestamp="2026-04-13T10:00:00Z",
+        timestamp="2026-04-13T10:00:00.000000Z",
     )
-    db_conn.commit()
 
     found = repo.find_by_idempotency_key("test", "idem-1")
     assert found is not None
@@ -102,6 +101,13 @@ def test_find_by_idempotency_key(db_conn):
 
     not_found = repo.find_by_idempotency_key("test", "idem-999")
     assert not_found is None
+
+
+def test_find_by_idempotency_key_rejects_none(db_conn):
+    """Passing None as idempotency_key must raise ValueError."""
+    repo = JournalRepository(db_conn)
+    with pytest.raises(ValueError, match="idempotency_key must not be None"):
+        repo.find_by_idempotency_key("test", None)
 
 
 def test_get_all_events_in_namespace(db_conn):
@@ -121,9 +127,8 @@ def test_get_all_events_in_namespace(db_conn):
             idempotency_key=None,
             payload_hash=f"h{i}",
             schema_version=1,
-            timestamp=f"2026-04-13T10:0{i}:00Z",
+            timestamp=f"2026-04-13T10:0{i}:00.000000Z",
         )
-    db_conn.commit()
 
     events = repo.get_all_events_in_namespace("test")
     assert len(events) == 5
@@ -149,9 +154,8 @@ def test_get_event_count(db_conn):
         idempotency_key=None,
         payload_hash="h1",
         schema_version=1,
-        timestamp="2026-04-13T10:00:00Z",
+        timestamp="2026-04-13T10:00:00.000000Z",
     )
-    db_conn.commit()
     assert repo.get_event_count() == 1
 
 
@@ -174,9 +178,8 @@ def test_get_namespace_count(db_conn):
             idempotency_key=None,
             payload_hash=f"h-{ns}-{i}",
             schema_version=1,
-            timestamp="2026-04-13T10:00:00Z",
+            timestamp="2026-04-13T10:00:00.000000Z",
         )
-    db_conn.commit()
     assert repo.get_namespace_count() == 2
 
 
@@ -198,7 +201,6 @@ def test_get_last_write_timestamp(db_conn):
         idempotency_key=None,
         payload_hash="h1",
         schema_version=1,
-        timestamp="2026-04-13T10:00:00Z",
+        timestamp="2026-04-13T10:00:00.000000Z",
     )
-    db_conn.commit()
-    assert repo.get_last_write_timestamp() == "2026-04-13T10:00:00Z"
+    assert repo.get_last_write_timestamp() == "2026-04-13T10:00:00.000000Z"

@@ -1,3 +1,8 @@
+"""Journal repository — append-only event log.
+
+Repositories do **not** commit.  The service layer owns transactions via
+`cortex.storage.database.transaction()`.
+"""
 import sqlite3
 
 
@@ -46,10 +51,22 @@ class JournalRepository:
     def find_by_idempotency_key(
         self, namespace: str, idempotency_key: str
     ) -> dict | None:
+        """Return the stored event matching this idempotency key, or None.
+
+        Raises ValueError if idempotency_key is None — callers must check
+        before calling this method.
+        """
+        # C1: guard against None being passed — would produce a SQL bug
+        if idempotency_key is None:
+            raise ValueError("idempotency_key must not be None")
+
         cursor = self._conn.execute(
             """SELECT event_id, payload_hash, sequence_number, timestamp
             FROM events
-            WHERE namespace = ? AND idempotency_key = ?""",
+            WHERE namespace = ?
+              AND idempotency_key IS NOT NULL
+              AND idempotency_key = ?
+            LIMIT 1""",
             (namespace, idempotency_key),
         )
         row = cursor.fetchone()

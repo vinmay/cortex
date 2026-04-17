@@ -1,4 +1,27 @@
+"""Projection (materialized view) repository.
+
+Repositories do **not** commit.  The service layer owns transactions via
+`cortex.storage.database.transaction()`.
+"""
+import re
 import sqlite3
+
+_METADATA_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_METADATA_KEY_MAX_LEN = 64
+
+
+def _assert_safe_metadata_keys(metadata_filter: dict[str, str]) -> None:
+    """Defense-in-depth: reject invalid metadata keys before building SQL."""
+    for key in metadata_filter:
+        if len(key) > _METADATA_KEY_MAX_LEN:
+            raise ValueError(
+                f"Metadata key {key!r} exceeds maximum length of {_METADATA_KEY_MAX_LEN}"
+            )
+        if not _METADATA_KEY_PATTERN.match(key):
+            raise ValueError(
+                f"Metadata key {key!r} is invalid — keys must match "
+                r"^[A-Za-z_][A-Za-z0-9_]*$ (no dots, dashes, or special chars)"
+            )
 
 
 class ProjectionRepository:
@@ -89,6 +112,10 @@ class ProjectionRepository:
         limit: int = 10,
         entity_ids: list[str] | None = None,
     ) -> list[dict]:
+        # C2 defense-in-depth: validate metadata keys before building SQL
+        if metadata_filter:
+            _assert_safe_metadata_keys(metadata_filter)
+
         sql = "SELECT * FROM memory_state WHERE namespace = ? AND is_retracted = 0"
         params: list = [namespace]
 
@@ -125,6 +152,12 @@ class ProjectionRepository:
         return self.query(namespace=namespace, limit=limit)
 
     def delete_namespace(self, namespace: str) -> None:
+        """Delete all projection rows for a namespace.
+
+        This method is intended to be called inside a `transaction()` block,
+        immediately followed by replaying journal events, as part of
+        `rebuild_namespace`.  Do not call it outside a transaction.
+        """
         self._conn.execute(
             "DELETE FROM memory_state WHERE namespace = ?",
             (namespace,),

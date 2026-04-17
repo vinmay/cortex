@@ -1,6 +1,8 @@
 import sqlite3
 
-from cortex.storage.database import init_db, get_connection
+import pytest
+
+from cortex.storage.database import get_connection, init_db, transaction
 
 
 def test_init_db_creates_tables(tmp_path):
@@ -89,11 +91,8 @@ def test_idempotency_unique_index(tmp_path):
          schema_version, timestamp)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         ("e1", "memory.created", "ns", "fact", "f1",
-         '{}', "test", "key1", "hash1", 1, "2026-01-01T00:00:00Z"),
+         '{"x":1}', "test", "key1", "hash1", 1, "2026-01-01T00:00:00.000000Z"),
     )
-    conn.commit()
-
-    import pytest
 
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
@@ -103,7 +102,7 @@ def test_idempotency_unique_index(tmp_path):
              schema_version, timestamp)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             ("e2", "memory.created", "ns", "fact", "f2",
-             '{}', "test", "key1", "hash2", 1, "2026-01-01T00:00:00Z"),
+             '{"x":2}', "test", "key1", "hash2", 1, "2026-01-01T00:00:00.000000Z"),
         )
 
 
@@ -113,3 +112,70 @@ def test_init_db_idempotent(tmp_path):
     conn = get_connection(db_path)
     init_db(conn)
     init_db(conn)  # Should not raise
+
+
+def test_transaction_rolls_back_on_exception(tmp_path):
+    """transaction() must roll back all writes if an exception is raised."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_db(conn)
+
+    with pytest.raises(RuntimeError, match="forced rollback"):
+        with transaction(conn):
+            conn.execute(
+                """INSERT INTO events
+                (event_id, event_type, namespace, entity_type, entity_id,
+                 payload, actor_runtime, payload_hash, schema_version, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ("e-rollback", "memory.created", "ns", "fact", "fact:1",
+                 '{"x":1}', "test", "hash1", 1, "2026-01-01T00:00:00.000000Z"),
+            )
+            raise RuntimeError("forced rollback")
+
+    # Row must not exist after rollback
+    row = conn.execute(
+        "SELECT 1 FROM events WHERE event_id = ?", ("e-rollback",)
+    ).fetchone()
+    assert row is None
+
+
+def test_transaction_commits_on_success(tmp_path):
+    """transaction() must commit all writes on successful exit."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_db(conn)
+
+    with transaction(conn):
+        conn.execute(
+            """INSERT INTO events
+            (event_id, event_type, namespace, entity_type, entity_id,
+             payload, actor_runtime, payload_hash, schema_version, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("e-commit", "memory.created", "ns", "fact", "fact:1",
+             '{"x":1}', "test", "hash1", 1, "2026-01-01T00:00:00.000000Z"),
+        )
+
+    row = conn.execute(
+        "SELECT event_id FROM events WHERE event_id = ?", ("e-commit",)
+    ).fetchone()
+    assert row is not None
+    assert row[0] == "e-commit"
+
+
+def test_foreign_key_constraint_enforced(tmp_path):
+    """parent_event_id FK must be enforced (foreign_keys=ON)."""
+    db_path = tmp_path / "test.db"
+    conn = get_connection(db_path)
+    init_db(conn)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """INSERT INTO events
+            (event_id, event_type, namespace, entity_type, entity_id,
+             payload, actor_runtime, payload_hash, schema_version, timestamp,
+             parent_event_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("e-child", "memory.updated", "ns", "fact", "fact:1",
+             '{"x":2}', "test", "hash2", 1, "2026-01-01T00:00:01.000000Z",
+             "non-existent-parent"),
+        )
